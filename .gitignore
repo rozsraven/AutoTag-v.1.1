@@ -1,0 +1,8 @@
+__pycache__/
+.env
+.venv
+*.py[cod]
+*$py.class
+PDF/
+Paddle DOCX Output/
+*.so
