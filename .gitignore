@@ -5,4 +5,5 @@ __pycache__/
 *$py.class
 PDF/
 Paddle DOCX Output/
+output_folder/
 *.so

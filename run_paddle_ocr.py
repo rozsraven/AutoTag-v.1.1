@@ -15,7 +15,7 @@ os.environ["KMP_INIT_AT_FORK"] = "FALSE"
 # ==========================================
 
 import time
-import fitz
+import pymupdf as fitz
 import numpy as np
 import cv2
 import gc
@@ -453,8 +453,8 @@ def main():
 
     #input_folder = os.environ.get("PADDLE_INPUT_FOLDER", r"C:\Users\tior\Documents\AutoTag\BIA PDF NEW")
     #output_folder = os.environ.get("PADDLE_OUTPUT_FOLDER", r"C:\Users\tior\Documents\AutoTag\Paddle DOCX Output\BIA2")
-    input_folder = os.environ.get("PADDLE_INPUT_FOLDER", r"C:\Users\tior\Documents\AutoTag\AAO PDF")
-    output_folder = os.environ.get("PADDLE_OUTPUT_FOLDER", r"C:\Users\tior\Documents\AutoTag\Paddle DOCX Output\AAO2")
+    input_folder = os.environ.get("PADDLE_INPUT_FOLDER", r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\PDF\AAO")
+    output_folder = os.environ.get("PADDLE_OUTPUT_FOLDER", r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\Paddle DOCX Output\AAO2")
     
 
     os.makedirs(output_folder, exist_ok=True)
