@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pdf_ocr_preprocessor2 import pdf_ocr_preprocessor_main
 from image_output_processor2 import image_processor_main
-from image_to_xml import image_to_xml_main
+from image_to_xml_new import image_to_xml_main
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="fitz")  # Suppress PyMuPDF warnings
@@ -32,5 +32,10 @@ if __name__ == "__main__":
     image_to_xml_input_path = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\output_folder\processed_images\JAN132025_01D6101")
     image_to_xml_input_path_html = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\PDF\AAO")
     image_to_xml_output_path = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\output_folder\xml")
-    image_to_xml_main(input_folder=image_to_xml_input_path, output_folder=image_to_xml_output_path)
+    image_to_xml_main(
+        input_folder=image_to_xml_input_path,
+        html_folder_path=image_to_xml_input_path_html,
+        output_folder=image_to_xml_output_path,
+        process_type_name="AAO",
+    )
     print("Image to XML conversion completed.")
