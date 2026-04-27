@@ -178,8 +178,8 @@ class BIAXMLConverter:
 		adJudgmentBody = xml.SubElement(adOpinion, "ad:judgmentbody")
 		for para in coreParas:
 			xml.SubElement(adJudgmentBody, "core:para", indent="none").text = para.replace("~in0~", "")
-		if complete:
-			xml.SubElement(adJudgmentBody, "core:generic-hd", align="center").text = "FOR THE BOARD"
+		xml.SubElement(adJudgmentBody, "core:generic-hd", align="center").text = "FOR THE BOARD"
+		xml.SubElement(adJudgmentBody, "core:para").text = filename.replace(".docx", ".pdf")
 		if dissentText:
 			xml.SubElement(adJudgmentBody, "core:para").text = dissentText[0]
 		output = xml.ElementTree(root)

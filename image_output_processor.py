@@ -1,16 +1,11 @@
 import argparse
-import html
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-import tika
-from tika import parser
-
 from opencv_process import split_body_and_footnotes
+from run_paddle_ocr import create_paddle_ocr, extract_text_from_images
 
-
-tika.TikaClientOnly = True
 
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 
@@ -46,18 +41,6 @@ def collect_image_files(
     return image_files
 
 
-def extract_text_from_images(image_files: Sequence[str | Path]) -> str:
-    extracted_text = ""
-
-    for image_file in image_files:
-        raw = parser.from_file(str(image_file))
-        content = raw.get("content") if raw else None
-        if content:
-            extracted_text += content
-
-    return html.escape(extracted_text, quote=False)
-
-
 def process_pdf_ocr_images(
     image_files: Sequence[str | Path] | None = None,
     *,
@@ -67,8 +50,9 @@ def process_pdf_ocr_images(
         raise ValueError("Provide image_files.")
 
     body_images, footnote_images = split_body_and_footnotes(image_files, output_folder=output_folder)
-    body_text = extract_text_from_images(body_images)
-    footnote_text = extract_text_from_images(footnote_images)
+    ocr = create_paddle_ocr()
+    body_text = extract_text_from_images(body_images, ocr, escape_html=True)
+    footnote_text = extract_text_from_images(footnote_images, ocr, escape_html=True)
 
     return ProcessedPdfImages(
         body_images=body_images,
@@ -143,9 +127,3 @@ def image_processor_main(
     print(processed.footnote_text)
 
     return processed
-
-
-if __name__ == "__main__":
-    image_processor_input_path = r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\output_folder\pdf_ocr_preprocessor\JAN132025_01D6101"
-    image_processor_output_path = r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\output_folder\processed_images\JAN132025_01D6101"
-    image_processor_main(input_folder=image_processor_input_path, output_folder=image_processor_output_path)

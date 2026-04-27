@@ -1,0 +1,23 @@
+Pub 383 AI Prompt
+
+=====First Prompt=====
+You are converting scanned legal decision PDFs into XML.
+
+You are given:
+1. A sample source PDF
+2. Its correct XML output
+3. A new PDF that follows the same format
+
+Your job:
+- Infer the mapping rules from the sample PDF and sample XML
+- Extract the corresponding content from the new PDF
+- Produce JSON only, matching the same logical structure
+- Preserve redactions exactly as shown
+- Preserve page order and paragraph order
+- Do not invent text
+- If a field is unreadable, return null and mark it in an "uncertain_fields" array
+
+=====Second Prompt=====
+Transform this JSON into XML matching the sample XML structure exactly.
+Preserve tag order, attribute names, and filename references.
+Return XML only.

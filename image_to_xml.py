@@ -9,10 +9,11 @@ from typing import Iterable
 
 import bs4
 import cv2
+import numpy as np
 from bs4 import BeautifulSoup
-from paddleocr import PaddleOCR
+from dateutil.parser import parse
 
-from opencv_process import split_body_and_footnotes
+from run_paddle_ocr import create_paddle_ocr, extract_text_from_image
 
 
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
@@ -25,13 +26,37 @@ IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 DEFAULT_INPUT_FOLDER = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\output_folder\images\JAN132025_01D6101")
 DEFAULT_HTML_FILE = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\PDF\AAO\JAN132025_01D6101.htm")
 DEFAULT_OUTPUT_FOLDER = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\output_folder\xml")
+process_type = "AAO"
 REDACTION_MARKERS = ("xx", "XX", "Xx", "xX")
 REDACTION_REPLACEMENT = '<core:emph typestyle="bf">[redacted]</core:emph>'
 HEADER_PLATE = "<?xml version='1.0' encoding='UTF-8'?><!DOCTYPE ad:decision-grp PUBLIC \"-//LEXISNEXIS//DTD Admin-Interp-pub v005//EN//XML\" \"D:\\Pub383\\DTD\\DTD\\admin-interp-pubV005-0000\\admin-interp-pubV005-0000.dtd\"><?Pub EntList alpha bull copy rArr sect trade para mdash ldquo lsquo rdquo rsquo dagger hellip ndash frac23 amp?>"
+BIA_HEADER_PLATE = r"""<?xml version="1.0" encoding="UTF-8"?><!--Arbortext, Inc., 1988-2015, v.4002--><!DOCTYPE ad:decision-grp PUBLIC "-//LEXISNEXIS//DTD Admin-Interp-pub v005//EN//XML" "C:\Neptune\NeptuneEditor\doctypes\admin-interp-pubV005-0000\admin-interp-pubV005-0000.dtd"><?Pub UDT delete _display FontColor="red" StrikeThrough="yes" Composed="yes" Save="yes"?><?Pub UDT add _display FontColor="blue" Underline="yes" Composed="yes" Save="yes"?><?Pub UDT plpt_delete _display FontColor="red" StrikeThrough="yes" Composed="yes" Save="yes"?><?Pub UDT plpt_add _display FontColor="blue" Underline="yes" Composed="yes" Save="yes"?><?Pub UDT notes_delete _display FontColor="red" StrikeThrough="yes" Composed="yes" Save="yes"?><?Pub UDT notes_add _display FontColor="blue" Underline="yes" Composed="yes" Save="yes"?><?Pub UDT EditAid-UC _display FontColor="orange" Composed="yes" Save="yes"?><?Pub UDT EditAid-Quotes _display FontColor="green" Composed="yes" Save="yes"?><?Pub UDT EditAid-Hyphens _display FontColor="violet" Composed="yes" Save="yes"?><?Pub UDT Mod _pi?><?Pub UDT AttrModified _display BackColor="#c0c0c0" StrikeThrough="no" Composed="yes" Save="yes"?><?Pub UDT Deleted _display BackColor="#ffffc0" Composed="yes" Save="yes"?><?Pub UDT Inserted _display BackColor="#ffc0ff" Composed="yes" Save="yes"?><?Pub EntList alpha bull copy rArr sect trade para mdash ldquo lsquo rdquo rsquo dagger hellip ndash frac23 amp?><?Pub Inc?>"""
+BIA_FOOTER_PLATE = "<?Pub Caret -2?>"
+BIA_END_MARKER = "</ad:decision-grp>"
+BIA_EXPANDED_FORM = {
+    "~/ib~": "</core:emph>",
+    "~/IB~": "</core:emph>",
+    "~/i~": "</core:emph>",
+    "~/I~": "</core:emph>",
+    "~/b~": "</core:emph>",
+    "~/B~": "</core:emph>",
+    "~b~": '<core:emph typestyle = "bf">',
+    "~B~": '<core:emph typestyle = "bf">',
+    "~i~": '<core:emph typestyle="it">',
+    "~I~": '<core:emph typestyle="it">',
+    "~ib~": '<core:emph typestyle="ib">',
+    "~IB~": '<core:emph typestyle="ib">',
+    "~u~": '<core:emph typestyle="un">',
+    "~U~": '<core:emph typestyle="un">',
+    "&N": "&amp;N",
+}
 FNSTYLE_PATTERN = r"[^.*]*font-size: 7.*?}"
 FURTHER_ORDER_PATTERN = re.compile(r"(F+U+R+T+H+E+R+\s+O+R+D+E+R+:)")
 ORDER_PATTERN = re.compile(r"(O+R+D+E+R+:)(?!<)")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
+VALID_PROCESS_TYPES = {"AAO", "BIA"}
+_SPLIT_SCALE = 0.35
+_MIN_HORIZONTAL_WIDTH = 300
 
 
 @dataclass
@@ -41,6 +66,75 @@ class ImageXmlPage:
     footnote_image: str | None
     body_text: str
     footnote_text: str
+
+
+@dataclass
+class BiaOcrParseResult:
+    juris_name: str
+    case_name: str
+    file_num: str
+    decision_date: str
+    type_of_case: list[str]
+    parties: list[str]
+    core_paras: list[str]
+    complete: bool
+    multiparty: bool
+
+
+BIA_TYPE_CASES = (
+    "IN REMOVAL PROCEEDINGS",
+    "APPEAL",
+    "APPLICATION",
+    "INTERLOCUTORY APPEAL",
+    "MOTION",
+    "CHARGE",
+    "IN DEPORTATION PROCEEDINGS",
+)
+
+BIA_PARTICIPANT_MARKERS = (
+    "ON BEHALF OF",
+    "Assistant Chief",
+    "Senior Litigation Coordinator",
+    "Senior Attorney",
+    "Deputy Chief Counsel",
+    "Associate Counsel",
+    "Associate Legal Advisor",
+    "Assistant Chief Counsel",
+)
+
+BIA_REGARDING_MARKERS = (
+    "a.k.a. ",
+    "In re: ",
+    "In re ",
+    "Matter of ",
+)
+
+BIA_HEADER_SKIP_PREFIXES = (
+    "Falls Church",
+    "U.S. Department of Justice",
+    "Userteam:",
+)
+
+
+def normalize_process_type(value: str) -> str:
+    normalized = value.strip().upper()
+    if normalized not in VALID_PROCESS_TYPES:
+        expected = ", ".join(sorted(VALID_PROCESS_TYPES))
+        raise ValueError(f"Unsupported process_type: {value}. Expected one of: {expected}")
+    return normalized
+
+
+def find_matching_html_file(input_path: Path, html_directory: Path) -> Path | None:
+    html_candidates = [
+        html_directory / f"{input_path.name}.htm",
+        html_directory / f"{input_path.name}.html",
+    ]
+
+    for html_file in html_candidates:
+        if html_file.exists() and html_file.is_file():
+            return html_file
+
+    return None
 
 
 def collect_image_files(
@@ -91,116 +185,205 @@ def collect_image_files(
     return image_files
 
 
-def preprocess_image(image_bgr):
-    height, width = image_bgr.shape[:2]
-    scale = 1.5
-    resized = cv2.resize(
-        image_bgr,
-        (int(width * scale), int(height * scale)),
-        interpolation=cv2.INTER_CUBIC,
-    )
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-    filtered = cv2.bilateralFilter(gray, 7, 50, 50)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(filtered)
-    return cv2.adaptiveThreshold(
-        enhanced,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31,
-        9,
-    )
-
-
-def _box_metrics(box):
-    points = box[0]
-    x_values = [point[0] for point in points]
-    y_values = [point[1] for point in points]
-    left = min(x_values)
-    right = max(x_values)
-    top = min(y_values)
-    bottom = max(y_values)
-    height = max(1.0, bottom - top)
-    y_center = (top + bottom) / 2.0
-    return left, right, top, bottom, height, y_center
-
-
-def order_paddleocr_boxes_reading_order(raw_boxes):
-    items = []
-    for box in raw_boxes:
-        text = (box[1][0] or "").strip()
-        if not text:
-            continue
-        left, right, top, bottom, height, y_center = _box_metrics(box)
-        items.append((y_center, top, bottom, left, height, box))
-
-    if not items:
-        return []
-
-    items.sort(key=lambda item: (item[0], item[3]))
-    heights = sorted(item[4] for item in items)
-    median_height = heights[len(heights) // 2] if heights else 12.0
-    line_y_threshold = max(8.0, 0.55 * median_height)
-
-    lines = []
-    current_line = []
-    current_y = None
-
-    for y_center, top, bottom, left, _, box in items:
-        if current_y is None:
-            current_line = [(y_center, top, bottom, left, box)]
-            current_y = y_center
-            continue
-
-        if abs(y_center - current_y) <= line_y_threshold:
-            current_line.append((y_center, top, bottom, left, box))
-            current_y = (current_y * 0.8) + (y_center * 0.2)
-            continue
-
-        current_line.sort(key=lambda item: item[3])
-        lines.append(current_line)
-        current_line = [(y_center, top, bottom, left, box)]
-        current_y = y_center
-
-    if current_line:
-        current_line.sort(key=lambda item: item[3])
-        lines.append(current_line)
-
-    return lines
-
-
 def normalize_text(text: str) -> str:
     normalized = text.replace("\u00A0", " ")
     normalized = _WHITESPACE_PATTERN.sub(" ", normalized).strip()
     return normalized
 
 
-def extract_text_from_image(image_path: str | Path, ocr: PaddleOCR) -> str:
-    image = cv2.imread(str(image_path))
-    if image is None:
-        raise FileNotFoundError(f"Could not read image: {image_path}")
+def iter_ocr_lines(ocr_text: str | Iterable[str]) -> Iterable[str]:
+    if isinstance(ocr_text, str):
+        yield from ocr_text.splitlines()
+        return
 
-    prepared = preprocess_image(image)
-    result = ocr.ocr(prepared, cls=False)
-    if not result or not result[0]:
-        return ""
-
-    lines = order_paddleocr_boxes_reading_order(result[0])
-    text_lines: list[str] = []
-    for line in lines:
-        parts = []
-        for _, _, _, _, box in line:
-            candidate = (box[1][0] or "").strip()
-            if candidate:
-                parts.append(candidate)
-        if parts:
-            text_lines.append(normalize_text(" ".join(parts)))
-
-    return "\n".join(line for line in text_lines if line)
+    first_page = True
+    for page_text in ocr_text:
+        if not first_page:
+            yield ""
+            yield ""
+            yield ""
+        first_page = False
+        yield from page_text.splitlines()
 
 
-def build_page_record(image_path: Path, ocr: PaddleOCR) -> ImageXmlPage:
+def extract_year_token(text: str) -> str | None:
+    match = re.search(r"(?<!\d)(?:19|20)\d{2}(?!\d)", text)
+    if match is None:
+        return None
+    return match.group(0)
+
+
+def infer_bia_year(
+    input_path: Path,
+    bia_result: BiaOcrParseResult,
+    raw_body_text: str,
+    html_path: Path | None,
+) -> str | None:
+    candidate_texts = [
+        bia_result.decision_date,
+        input_path.name,
+        bia_result.file_num,
+        bia_result.case_name,
+        raw_body_text,
+    ]
+
+    for candidate in candidate_texts:
+        if not candidate:
+            continue
+        year = extract_year_token(candidate)
+        if year is not None:
+            return year
+
+    if html_path is None or not html_path.exists() or not html_path.is_file():
+        return None
+
+    with open(html_path, "r", encoding="utf-8", errors="ignore") as handle:
+        html_text = BeautifulSoup(handle.read(), "lxml").get_text(" ", strip=True)
+
+    return extract_year_token(html_text)
+
+
+def infer_aao_year(
+    input_path: Path,
+    decision_date: str,
+    raw_body_text: str,
+    html_path: Path | None,
+) -> str | None:
+    candidate_texts = [
+        input_path.name,
+        decision_date,
+        raw_body_text,
+    ]
+
+    for candidate in candidate_texts:
+        if not candidate:
+            continue
+
+        year = extract_year_token(candidate)
+        if year is not None:
+            return year
+
+        try:
+            parsed_date = parse(candidate, fuzzy=True)
+        except Exception:
+            continue
+
+        if 1900 <= parsed_date.year <= 2099:
+            return str(parsed_date.year)
+
+    if html_path is None or not html_path.exists() or not html_path.is_file():
+        return None
+
+    with open(html_path, "r", encoding="utf-8", errors="ignore") as handle:
+        html_text = BeautifulSoup(handle.read(), "lxml").get_text(" ", strip=True)
+
+    year = extract_year_token(html_text)
+    if year is not None:
+        return year
+
+    try:
+        parsed_date = parse(html_text, fuzzy=True)
+    except Exception:
+        return None
+
+    if 1900 <= parsed_date.year <= 2099:
+        return str(parsed_date.year)
+
+    return None
+
+
+def _discard_large_connected_components(image: np.ndarray) -> np.ndarray:
+    image = np.uint8(image)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(image, connectivity=4)
+
+    wide_components = np.isin(labels, np.where(stats[:, cv2.CC_STAT_WIDTH] > _MIN_HORIZONTAL_WIDTH)[0])
+    tall_components = np.isin(labels, np.where(stats[:, cv2.CC_STAT_HEIGHT] > _MIN_HORIZONTAL_WIDTH)[0])
+    image[(wide_components | tall_components)] = 0
+    return image
+
+
+def split_body_and_footnotes(image_paths: Iterable[Path]) -> tuple[list[str], list[str]]:
+    body_images: list[str] = []
+    footnote_images: list[str] = []
+
+    for image_path in image_paths:
+        source_path = Path(image_path)
+        original = cv2.imread(str(source_path), cv2.IMREAD_GRAYSCALE)
+        if original is None:
+            body_images.append(str(source_path))
+            continue
+
+        resized = cv2.resize(original, None, fx=_SPLIT_SCALE, fy=_SPLIT_SCALE, interpolation=cv2.INTER_LINEAR)
+        height, width = resized.shape[:2]
+        inverted = 255 - resized
+        _, thresholded = cv2.threshold(inverted, 5, 255, cv2.THRESH_BINARY)
+
+        without_lines = _discard_large_connected_components(thresholded.copy())
+        horizontal = cv2.bitwise_xor(thresholded, without_lines)
+        kernel = np.array(
+            [[0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0],
+             [1, 1, 1, 1, 1],
+             [0, 0, 0, 0, 0],
+             [0, 0, 0, 0, 0]],
+            dtype=np.uint8,
+        )
+        horizontal = cv2.morphologyEx(horizontal, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        if not horizontal.any():
+            body_images.append(str(source_path))
+            continue
+
+        contours, _ = cv2.findContours(horizontal, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            body_images.append(str(source_path))
+            continue
+
+        split_y = None
+        for contour in sorted(contours, key=lambda current: cv2.boundingRect(current)[2], reverse=True):
+            _, y, _, contour_height = cv2.boundingRect(contour)
+            candidate = y + contour_height
+            if 0 < candidate < height:
+                split_y = candidate
+                break
+
+        if split_y is None:
+            body_images.append(str(source_path))
+            continue
+
+        original_image = cv2.imread(str(source_path))
+        if original_image is None:
+            body_images.append(str(source_path))
+            continue
+
+        original_height, original_width = original_image.shape[:2]
+        scaled_split_y = max(1, min(original_height - 1, int(split_y / _SPLIT_SCALE)))
+
+        body_output = source_path.with_name(f"{source_path.stem}_body{source_path.suffix}")
+        footnote_output = source_path.with_name(f"{source_path.stem}_footnotes{source_path.suffix}")
+
+        body_slice = original_image[0:scaled_split_y, 0:original_width]
+        footnote_slice = original_image[scaled_split_y:original_height, 0:original_width]
+
+        if body_slice.size == 0:
+            body_images.append(str(source_path))
+            continue
+
+        cv2.imwrite(str(body_output), body_slice)
+        body_images.append(str(body_output))
+
+        if footnote_slice.size != 0:
+            cv2.imwrite(str(footnote_output), footnote_slice)
+            footnote_images.append(str(footnote_output))
+
+    return body_images, footnote_images
+
+
+def extract_page_text(image_path: str | Path, ocr) -> str:
+    return extract_text_from_image(image_path, ocr, normalize_legal=True)
+
+
+def build_page_record(image_path: Path, ocr) -> ImageXmlPage:
     if image_path.stem.endswith("_body"):
         body_image = str(image_path)
         footnote_candidate = image_path.with_name(f"{image_path.stem[:-5]}_footnotes{image_path.suffix}")
@@ -210,8 +393,8 @@ def build_page_record(image_path: Path, ocr: PaddleOCR) -> ImageXmlPage:
         body_image = body_images[0] if body_images else str(image_path)
         footnote_image = footnote_images[0] if footnote_images else None
 
-    body_text = extract_text_from_image(body_image, ocr)
-    footnote_text = extract_text_from_image(footnote_image, ocr) if footnote_image else ""
+    body_text = extract_page_text(body_image, ocr)
+    footnote_text = extract_page_text(footnote_image, ocr) if footnote_image else ""
 
     return ImageXmlPage(
         source_image=str(image_path),
@@ -228,7 +411,7 @@ def replace_redaction_markers(text: str) -> str:
     return text
 
 
-def process_ocr_string(ocr_text: str, filename: str):
+def process_ocr_string(ocr_text: str | Iterable[str], filename: str):
     count = 0
     start_parse = False
     core_paras: list[str] = []
@@ -242,7 +425,7 @@ def process_ocr_string(ocr_text: str, filename: str):
 
     type_of_case.append("AAO Designation: " + filename[filename.index("_") + 3 : len(filename) - 7])
 
-    for line in ocr_text.split("\n"):
+    for line in iter_ocr_lines(ocr_text):
         if line in ("", "/N"):
             count += 1
             continue
@@ -307,6 +490,160 @@ def process_ocr_string(ocr_text: str, filename: str):
             plain_content_start = True
 
     return case_name, case_date, core_paras, type_of_case, file_num
+
+
+def is_date(text: str, *, fuzzy: bool = False) -> bool:
+    try:
+        parse(text, fuzzy=fuzzy)
+        return True
+    except Exception:
+        return False
+
+
+def process_bia_ocr_string(ocr_text: str | Iterable[str]):
+    start_parse = False
+    body_started = False
+    complete = False
+    multiparty = False
+    juris_name = "Decision of the Board of Immigration Appeals"
+    case_name_parts: list[str] = []
+    type_of_case: list[str] = []
+    parties: list[str] = []
+    core_paras: list[str] = []
+    file_num = "Filenum not found"
+    decision_date = "~FD~"
+    blank_count = 0
+    new_page = False
+
+    for raw_line in iter_ocr_lines(ocr_text):
+        paragraph = normalize_text(html.unescape(raw_line))
+        if not paragraph:
+            blank_count += 1
+            continue
+
+        if blank_count > 2:
+            new_page = True
+        blank_count = 0
+
+        upper_paragraph = paragraph.upper()
+
+        if "Decision of the Board of" in paragraph:
+            juris_name = paragraph[paragraph.find("Decision") :]
+            start_parse = True
+            new_page = False
+            continue
+
+        if paragraph.startswith(BIA_HEADER_SKIP_PREFIXES):
+            start_parse = True
+            new_page = False
+            continue
+
+        if upper_paragraph.startswith("UNITED STATES DEPARTMENT OF JUSTICE EXECUTIVE"):
+            break
+
+        if not start_parse:
+            continue
+
+        if " respectfully dissents " in paragraph:
+            core_paras.append(paragraph)
+            new_page = False
+            continue
+
+        if "FOR THE BOARD" in upper_paragraph:
+            complete = True
+            new_page = False
+            continue
+
+        if paragraph.startswith(("File:", "Files:")):
+            file_num = paragraph
+            body_started = True
+            new_page = False
+            continue
+
+        cleaned_date = paragraph.replace("Date:", "").replace("DATE:", "").replace("-", " ").replace(" _", " ").strip()
+        if decision_date == "~FD~" and cleaned_date and len(cleaned_date) < 40 and is_date(cleaned_date, fuzzy=True):
+            decision_date = cleaned_date
+            new_page = False
+            continue
+
+        if paragraph.startswith(BIA_REGARDING_MARKERS):
+            for current_type in BIA_TYPE_CASES:
+                if current_type in upper_paragraph and current_type not in type_of_case:
+                    type_of_case.append(current_type)
+                    paragraph = paragraph.replace(current_type, "").strip()
+                    upper_paragraph = paragraph.upper()
+            case_name_parts.append(paragraph)
+            body_started = True
+            new_page = False
+            continue
+
+        if paragraph.startswith(BIA_TYPE_CASES):
+            if paragraph not in type_of_case:
+                type_of_case.append(paragraph)
+            body_started = True
+            new_page = False
+            continue
+
+        if paragraph.startswith(BIA_PARTICIPANT_MARKERS):
+            if " ORDER:" in paragraph:
+                paragraph = paragraph.replace(" ORDER:", "")
+                core_paras.insert(0, "ORDER:")
+
+            if "RESPONDENTS" in upper_paragraph:
+                multiparty = True
+                cleaned_party = (
+                    paragraph.replace("ON BEHALF OF RESPONDENTS: ", "")
+                    .replace("ON BEHALF OF THE RESPONDENTS: ", "")
+                    .replace("ON BEHALF OF THE RESPONDENTS : ", "")
+                    .replace("ON BEHALF OF RESPONDENTS : ", "")
+                )
+            else:
+                cleaned_party = (
+                    paragraph.replace("ON BEHALF OF DHS: ", "")
+                    .replace("ON BEHALF OF RESPONDENT: ", "")
+                    .replace("ON BEHALF OF THE DHS: ", "")
+                    .replace("ON BEHALF OF RESPONDENT : ", "")
+                    .replace("ON BEHALF OF DHS : ", "")
+                    .replace("ON BEHALF OF DHS:", "")
+                )
+
+            parties.append(cleaned_party.strip())
+            body_started = True
+            new_page = False
+            continue
+
+        if len(paragraph) < 3 or (paragraph.startswith("~") and len(paragraph) <= 6):
+            continue
+
+        if not body_started and not case_name_parts:
+            case_name_parts.append(paragraph)
+            new_page = False
+            continue
+
+        if new_page and core_paras and paragraph[0].islower():
+            core_paras[-1] = core_paras[-1] + " " + paragraph
+        else:
+            core_paras.append(paragraph)
+        new_page = False
+
+    case_name = " ".join(case_name_parts).strip() or "caseNameNotFound"
+    if case_name == "caseNameNotFound" and core_paras:
+        case_name = core_paras[0]
+        core_paras = core_paras[1:]
+
+    core_paras = continuity_fix(core_paras)
+
+    return BiaOcrParseResult(
+        juris_name=juris_name,
+        case_name=case_name,
+        file_num=file_num,
+        decision_date=decision_date,
+        type_of_case=type_of_case,
+        parties=parties,
+        core_paras=core_paras,
+        complete=complete,
+        multiparty=multiparty,
+    )
 
 
 def flatten_footnotes(footnote_text: str) -> list[str]:
@@ -582,6 +919,121 @@ def clean_xml_spaces(xml_file: str) -> str:
     return re.sub(r"\s+", " ", xml_file)
 
 
+def expand_tokens(xml_string: str, replacements: dict[str, str]) -> str:
+    for short_token, expanded_token in replacements.items():
+        xml_string = xml_string.replace(short_token, expanded_token)
+    return xml_string
+
+
+def unescape_serialized_xml_tags(xml_string: str) -> str:
+    return re.sub(
+        r"&lt;(/?(?:core|fn|ad|lnci):[A-Za-z0-9._-]+(?:\s+[^&<>]*?)?)&gt;",
+        r"<\1>",
+        xml_string,
+    )
+
+
+def add_bia_flag(parent, subject: str, message: str):
+    para = xml.SubElement(parent, "core:para")
+    flag = xml.SubElement(para, "core:flag", sender="Automated", recipient="PO")
+    xml.SubElement(flag, "core:flag-subject").text = subject
+    flag_message = xml.SubElement(flag, "core:message")
+    xml.SubElement(flag_message, "core:flag.para").text = message
+
+
+def append_bia_participants(parent, parties: list[str], multiparty: bool):
+    if not parties:
+        return
+
+    participants = xml.SubElement(parent, "ad:participants")
+
+    respondent = xml.SubElement(participants, "ad:participant")
+    xml.SubElement(respondent, "ad:relationship-phrase").text = "ON BEHALF OF "
+    xml.SubElement(respondent, "ad:party").text = "RESPONDENTS: " if multiparty else "RESPONDENT: "
+    respondent_person = xml.SubElement(respondent, "core:person")
+    xml.SubElement(respondent_person, "core:name.text").text = parties[0]
+
+    if len(parties) > 1:
+        dhs_participant = xml.SubElement(participants, "ad:participant")
+        xml.SubElement(dhs_participant, "ad:relationship-phrase").text = "ON BEHALF OF "
+        xml.SubElement(dhs_participant, "ad:party").text = "DHS: "
+        dhs_person = xml.SubElement(dhs_participant, "core:person")
+        xml.SubElement(dhs_person, "core:name.text").text = parties[1]
+        for extra_party in parties[2:]:
+            xml.SubElement(dhs_person, "core:name.text").text = " " + extra_party
+
+
+def append_bia_judgment_body(judgment_body, core_paras: list[str]):
+    for para in core_paras:
+        cleaned_para = para.strip()
+        if not cleaned_para:
+            continue
+        if cleaned_para == "ORDER:":
+            xml.SubElement(judgment_body, "core:generic-hd", align="left").text = cleaned_para
+            continue
+        if cleaned_para.startswith("~gh~"):
+            xml.SubElement(judgment_body, "core:generic-hd", align="center").text = cleaned_para.replace("~gh~", "").replace("~li~", "")
+            continue
+        if cleaned_para.startswith("On Appeal from ") or cleaned_para.startswith("Before:"):
+            xml.SubElement(judgment_body, "core:generic-hd", align="center").text = cleaned_para
+            continue
+        if cleaned_para.startswith("ORDER:") or cleaned_para.startswith("FURTHER ORDER:"):
+            xml.SubElement(judgment_body, "core:para", indent="none").text = cleaned_para
+            continue
+        if re.fullmatch(r"[A-Z][A-Z,\-\s.']*Immigration Judge", cleaned_para):
+            xml.SubElement(judgment_body, "core:para").text = cleaned_para
+            continue
+        xml.SubElement(judgment_body, "core:para", indent="none").text = cleaned_para.replace("~in0~", "")
+
+
+def append_bia_board_signature(judgment_body, pdf_filename: str):
+    xml.SubElement(judgment_body, "core:generic-hd", align="center").text = "FOR THE BOARD"
+    xml.SubElement(judgment_body, "core:para").text = pdf_filename
+
+
+def add_bia_emphasis_to_xml(xml_file: str, html_file: Path | None) -> str:
+    if html_file is None or not html_file.exists() or not html_file.is_file():
+        return xml_file
+
+    with open(html_file, "r", encoding="utf-8", errors="ignore") as handle:
+        soup = BeautifulSoup(handle.read(), "lxml")
+
+    body_start_marker = "<ad:judgmentbody>"
+    body_end_marker = "</ad:judgmentbody>"
+    body_start = xml_file.find(body_start_marker)
+    body_end = xml_file.rfind(body_end_marker)
+    if body_start == -1 or body_end == -1 or body_end <= body_start:
+        return xml_file
+
+    prefix = xml_file[: body_start + len(body_start_marker)]
+    body = xml_file[body_start + len(body_start_marker) : body_end]
+    suffix = xml_file[body_end:]
+    normalized_body = " ".join(body.split())
+
+    for emphasis in soup.find_all(["i", "em"]):
+        content = normalize_text(emphasis.get_text(" ", strip=True))
+        if not content:
+            continue
+
+        prevtext = emphasis.previous_sibling
+        marker = ""
+        index = 0
+        if isinstance(prevtext, bs4.element.NavigableString):
+            marker = normalize_text(f"{prevtext}{content}")
+            index = get_xmlstr_index(normalized_body, marker)
+        elif prevtext is not None and getattr(prevtext, "string", None) is not None:
+            marker = normalize_text(f"{prevtext.string}{content}")
+            index = get_xmlstr_index(normalized_body, marker)
+
+        if index == 0:
+            continue
+
+        new_text = f'<core:emph typestyle="it">{content}</core:emph>'
+        normalized_body = normalized_body[: index - len(content)] + new_text + normalized_body[index:]
+
+    return prefix + normalized_body + suffix
+
+
 def write_aao_xml(
     clean_footnotes_list: list[str],
     case_name: str,
@@ -633,7 +1085,11 @@ def write_aao_xml(
         else:
             xml.SubElement(judgment_body, "core:para", indent="none").text = para
 
-    xml.SubElement(judgment_body, "core:generic-hd", attrib={"align": "left", "typestyle": "ro"}).text = filename
+    xml.SubElement(
+        judgment_body,
+        "core:generic-hd",
+        attrib={"align": "left", "typestyle": "ro"},
+    ).text = filename.replace(".docx", ".pdf")
 
     output = xml.ElementTree(root)
     out = io.BytesIO()
@@ -643,6 +1099,7 @@ def write_aao_xml(
     xml_string = add_footnotes(clean_footnotes_list, xml_string, html_file)
     xml_string = clean_xml_spaces(xml_string)
     xml_string = add_emphasis_to_xml(xml_string, html_file)
+    xml_string = unescape_serialized_xml_tags(xml_string)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as handle:
@@ -651,46 +1108,128 @@ def write_aao_xml(
     return output_file
 
 
+def write_bia_xml(
+    filename: str,
+    year: str,
+    bia_result: BiaOcrParseResult,
+    output_file: Path,
+    html_file: Path | None,
+) -> Path:
+    root = xml.Element("ad:decision-grp", volnum=year)
+    comment_tags = ["pub-num=00383", "ch-num=relXXXbiaX", "00383-relXXXbiaX", filename[:-1]]
+    for comment in comment_tags:
+        root.append(xml.Comment(comment))
+
+    adjudication = xml.SubElement(root, "ad:adjudication", volnum=year)
+    adjudication_info = xml.SubElement(adjudication, "ad:adjudication-info")
+
+    regarding = xml.SubElement(adjudication_info, "ad:regarding")
+    case_name_node = xml.SubElement(regarding, "core:para", {"indent": "none"})
+    case_name_node.text = bia_result.case_name
+
+    file_num_node = xml.SubElement(adjudication_info, "ad:filenum")
+    file_num_node.text = bia_result.file_num
+
+    adjudicator_info = xml.SubElement(adjudication_info, "ad:adjudicator-info")
+    juris = xml.SubElement(adjudicator_info, "core:juris")
+    juris_info = xml.SubElement(juris, "lnci:jurisinfo")
+    xml.SubElement(juris_info, "lnci:usa")
+    xml.SubElement(juris, "core:juris-name").text = bia_result.juris_name
+
+    dates = xml.SubElement(adjudication_info, "ad:dates")
+    normalized_date = bia_result.decision_date.replace("~i~", "").replace("~/i~", "")
+    xml.SubElement(dates, "ad:decisiondate").text = "Date: " + normalized_date
+
+    typeofcase = xml.SubElement(adjudication_info, "ad:typeofcase")
+    for case_type in bia_result.type_of_case:
+        xml.SubElement(typeofcase, "core:generic-hd", {"align": "left", "typestyle": "ro"}).text = case_type
+
+    append_bia_participants(adjudication_info, bia_result.parties, bia_result.multiparty)
+
+    content = xml.SubElement(adjudication, "ad:content")
+    judgments = xml.SubElement(content, "ad:judgments")
+    opinion = xml.SubElement(judgments, "ad:opinion")
+    judgment_body = xml.SubElement(opinion, "ad:judgmentbody")
+
+    append_bia_judgment_body(judgment_body, bia_result.core_paras)
+    append_bia_board_signature(judgment_body, filename.replace(".docx", ".pdf"))
+
+    output = xml.ElementTree(root)
+    out = io.BytesIO()
+    output.write(out)
+    xml_string = expand_tokens(BIA_HEADER_PLATE + out.getvalue().decode().replace(" & ", " &amp; "), BIA_EXPANDED_FORM)
+    marker_index = xml_string.index(BIA_END_MARKER)
+    xml_string = xml_string[:marker_index] + BIA_FOOTER_PLATE + xml_string[marker_index:]
+    xml_string = clean_xml_spaces(xml_string)
+    xml_string = add_bia_emphasis_to_xml(xml_string, html_file)
+    xml_string = unescape_serialized_xml_tags(xml_string)
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as handle:
+        handle.write(xml_string)
+
+    return output_file
+
 def process_image_folder(
     input_folder: str | Path = DEFAULT_INPUT_FOLDER,
     *,
     recursive: bool = False,
-    html_file: str | Path = DEFAULT_HTML_FILE,
+    html_file: str | Path | None = DEFAULT_HTML_FILE,
     output_folder: str | Path = DEFAULT_OUTPUT_FOLDER,
+    process_type_name: str = process_type,
 ) -> Path:
+    normalized_process_type = normalize_process_type(process_type_name)
     input_path = Path(input_folder)
-    html_path = Path(html_file)
+    html_path = Path(html_file) if html_file is not None else None
     output_path = Path(output_folder)
 
-    if not html_path.exists():
-        raise FileNotFoundError(f"HTML file does not exist: {html_path}")
-    if not html_path.is_file():
+    if normalized_process_type == "AAO":
+        if html_path is None:
+            raise FileNotFoundError("AAO conversion requires a matching HTML file.")
+        if not html_path.exists():
+            raise FileNotFoundError(f"HTML file does not exist: {html_path}")
+        if not html_path.is_file():
+            raise FileNotFoundError(f"HTML path is not a file: {html_path}")
+    elif html_path is not None and html_path.exists() and not html_path.is_file():
         raise FileNotFoundError(f"HTML path is not a file: {html_path}")
 
     image_files = collect_image_files(input_path, recursive=recursive)
 
-    ocr = PaddleOCR(
-        use_angle_cls=False,
-        lang="en",
-        use_gpu=False,
-        enable_mkldnn=False,
-        cpu_threads=2,
-        rec_batch_num=2,
-    )
+    ocr = create_paddle_ocr()
 
     pages = [build_page_record(image_path, ocr) for image_path in image_files]
-    raw_body = html.escape("\n".join(page.body_text for page in pages if page.body_text), quote=False)
-    raw_footnotes = html.escape("\n".join(page.footnote_text for page in pages if page.footnote_text), quote=False)
-    raw_body = replace_redaction_markers(raw_body)
-    raw_footnotes = replace_redaction_markers(raw_footnotes)
+    body_page_texts = [replace_redaction_markers(html.escape(page.body_text, quote=False)) for page in pages if page.body_text]
+    footnote_page_texts = [replace_redaction_markers(html.escape(page.footnote_text, quote=False)) for page in pages if page.footnote_text]
+    raw_body = "\n".join(body_page_texts)
+    raw_footnotes = "\n".join(footnote_page_texts)
 
     filename = f"{input_path.name}.docx"
-    year = input_path.name[input_path.name.index("_") - 4 : input_path.name.index("_")]
-    case_name, decision_date, core_paras, type_of_case, file_num = process_ocr_string(raw_body, filename)
+    output_file = output_path / f"{input_path.name}.xml"
+    if normalized_process_type == "BIA":
+        bia_result = process_bia_ocr_string(body_page_texts)
+        year = infer_bia_year(input_path, bia_result, raw_body, html_path)
+        if year is None:
+            raise ValueError(
+                f"Could not determine a 4-digit year for BIA input '{input_path.name}'. "
+                "Expected the decision date OCR text, folder name, OCR body text, or matching HTML file to contain a year."
+            )
+        return write_bia_xml(
+            filename,
+            year,
+            bia_result,
+            output_file,
+            html_path,
+        )
+
+    case_name, decision_date, core_paras, type_of_case, file_num = process_ocr_string(body_page_texts, filename)
+    year = infer_aao_year(input_path, decision_date, raw_body, html_path)
+    if year is None:
+        raise ValueError(
+            f"Could not determine a 4-digit year for AAO input '{input_path.name}'. "
+            "Expected the folder name, OCR decision date, OCR body text, or matching HTML file to contain a year."
+        )
     clean_footnotes_list = clean_footnotes(flatten_footnotes(raw_footnotes))
     core_paras = continuity_fix(core_paras)
-
-    output_file = output_path / f"{input_path.name}.xml"
     return write_aao_xml(
         clean_footnotes_list,
         case_name,
@@ -709,30 +1248,38 @@ def image_to_xml_main(
     input_folder: str | Path,
     html_folder_path: str | Path = DEFAULT_HTML_FILE.parent,
     output_folder: str | Path = DEFAULT_OUTPUT_FOLDER,
+    process_type_name: str = process_type,
 ) -> Path:
+    normalized_process_type = normalize_process_type(process_type_name)
     input_path = Path(input_folder)
     html_directory = Path(html_folder_path)
-    html_candidates = [
-        html_directory / f"{input_path.name}.htm",
-        html_directory / f"{input_path.name}.html",
-    ]
+    html_file = find_matching_html_file(input_path, html_directory)
 
-    for html_file in html_candidates:
-        if html_file.exists() and html_file.is_file():
-            return process_image_folder(
-                input_folder=input_path,
-                html_file=html_file,
-                output_folder=output_folder,
-            )
+    if normalized_process_type == "AAO" and html_file is None:
+        html_candidates = [
+            html_directory / f"{input_path.name}.htm",
+            html_directory / f"{input_path.name}.html",
+        ]
+        expected_files = ", ".join(str(path) for path in html_candidates)
+        raise FileNotFoundError(
+            f"Could not find a matching HTML file for {input_path.name}. Expected one of: {expected_files}"
+        )
 
-    expected_files = ", ".join(str(path) for path in html_candidates)
-    raise FileNotFoundError(
-        f"Could not find a matching HTML file for {input_path.name}. Expected one of: {expected_files}"
+    return process_image_folder(
+        input_folder=input_path,
+        html_file=html_file,
+        output_folder=output_folder,
+        process_type_name=normalized_process_type,
     )
 
 
 def main() -> Path:
-    output_file = image_to_xml_main(DEFAULT_INPUT_FOLDER, DEFAULT_HTML_FILE.parent, DEFAULT_OUTPUT_FOLDER)
+    output_file = image_to_xml_main(
+        DEFAULT_INPUT_FOLDER,
+        DEFAULT_HTML_FILE.parent,
+        DEFAULT_OUTPUT_FOLDER,
+        process_type_name=process_type,
+    )
     print(f"XML created: {html.escape(str(output_file), quote=False)}")
     return output_file
 

@@ -5,5 +5,9 @@ __pycache__/
 *$py.class
 PDF/
 Paddle DOCX Output/
+Paddle Text Output/
+output_folder/
 output_folder/
 *.so
+backup files/
+Rel 118 to 133 XMLS/

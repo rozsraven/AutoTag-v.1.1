@@ -197,6 +197,11 @@ def extract_text_from_images(
         return html.escape(text, quote=False)
     return text
 
+
+def _write_text_file(text: str, text_path: str | Path) -> None:
+    output_path = Path(text_path)
+    output_path.write_text(text.rstrip() + "\n" if text else "", encoding="utf-8")
+
 # ==========================================
 # Optional .env loader (no extra deps)
 # ==========================================
@@ -523,6 +528,144 @@ def process_pdf_file(
     process_pdf_worker(str(input_path), str(docx_path), queue)
     return docx_path
 
+
+def _get_pdf_output_stem(pdf_path: str | Path) -> str:
+    input_path = Path(pdf_path)
+    return f"{input_path.parent.name}_{input_path.stem}"
+
+
+def _get_pdf_text_output_path(pdf_path: str | Path, output_folder: str | Path) -> Path:
+    return Path(output_folder) / f"{_get_pdf_output_stem(pdf_path)}.txt"
+
+
+def extract_text_from_pdf(pdf_path: str | Path) -> str:
+    pdf = fitz.open(str(pdf_path))
+    prefer_text_layer = os.environ.get("PADDLE_PREFER_PDF_TEXT_LAYER", "1").strip() not in {"0", "false", "False"}
+    ocr = None
+    page_texts: list[str] = []
+
+    try:
+        for page in pdf:
+            page_text = ""
+
+            if prefer_text_layer:
+                page_text = (page.get_text("text") or "").strip()
+
+            if not page_text:
+                if ocr is None:
+                    ocr = create_paddle_ocr()
+
+                pix = page.get_pixmap(dpi=400)
+                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+
+                if pix.n == 4:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img_for_ocr = preprocess_image(img)
+                result = ocr.ocr(img_for_ocr, cls=False)
+
+                if result and result[0]:
+                    line_texts = []
+                    for line in order_paddleocr_boxes_reading_order(result[0]):
+                        parts = []
+                        for _, _, _, _, box in line:
+                            candidate = normalize_ocr_text(box[1][0] or "")
+                            if candidate:
+                                parts.append(normalize_legal_text(candidate))
+                        if parts:
+                            line_texts.append(" ".join(parts))
+                    page_text = "\n".join(line_texts).strip()
+
+                del img, img_for_ocr, result, pix
+                force_memory_cleanup()
+
+            if page_text:
+                page_texts.append(page_text)
+    finally:
+        pdf.close()
+        if ocr is not None:
+            del ocr
+        force_memory_cleanup()
+
+    return fix_common_cfr_subsections("\n\n".join(page_texts).strip())
+
+
+def process_pdf_to_text_file(input_file: str | Path, output_folder: str | Path) -> Path:
+    input_path = Path(input_file)
+    if not input_path.exists():
+        raise FileNotFoundError(f"PDF file does not exist: {input_path}")
+    if not input_path.is_file():
+        raise FileNotFoundError(f"Input path is not a file: {input_path}")
+    if input_path.suffix.lower() != ".pdf":
+        raise ValueError(f"Input file must be a PDF: {input_path}")
+
+    output_path = Path(output_folder)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    text_output_path = _get_pdf_text_output_path(input_path, output_path)
+    extracted_text = extract_text_from_pdf(input_path)
+    _write_text_file(extracted_text, text_output_path)
+    return text_output_path
+
+
+def pdf_to_text_ocr_main(input_folder: str | Path, output_folder: str | Path) -> list[Path]:
+    print("PDF OCR Started\n")
+
+    load_dotenv_if_present()
+
+    input_path = Path(input_folder)
+    output_path = Path(output_folder)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input folder does not exist: {input_path}")
+    if not input_path.is_dir():
+        raise NotADirectoryError(f"Input path is not a folder: {input_path}")
+
+    pdf_files = sorted(path for path in input_path.rglob("*.pdf") if path.is_file())
+    if not pdf_files:
+        raise FileNotFoundError(f"No PDF files found in: {input_path}")
+
+    output_files: list[Path] = []
+    successes = 0
+    fails = 0
+    skips = 0
+    start_time = time.time()
+
+    for pdf_file in pdf_files:
+        try:
+            print(f"Processing PDF: {pdf_file.relative_to(input_path)}")
+            output_file = _get_pdf_text_output_path(pdf_file, output_path)
+            if output_file.exists():
+                skips += 1
+                output_files.append(output_file)
+                print(f"Skipping existing text file: {output_file}")
+                continue
+
+            output_file = process_pdf_to_text_file(pdf_file, output_path)
+            output_files.append(output_file)
+            successes += 1
+            print(f"Saved text: {output_file}")
+        except Exception as exc:
+            fails += 1
+            print(f"Failed PDF {pdf_file}: {exc}")
+
+    total_seconds = time.time() - start_time
+
+    print("\n==============================")
+    print("DONE")
+    print("==============================")
+    print(f"Success: {successes}")
+    print(f"Skipped: {skips}")
+    print(f"Fail: {fails}")
+    print("Output files:")
+    for output_file in output_files:
+        print(output_file)
+    print(f"Total time: {total_seconds / 60:.2f} minutes")
+
+    return output_files
+
 def fix_common_cfr_subsections(text: str) -> str:
     """
     Fix OCR confusion i vs ii ONLY in the exact context of:
@@ -550,8 +693,8 @@ def main():
 
     #input_folder = os.environ.get("PADDLE_INPUT_FOLDER", r"C:\Users\tior\Documents\AutoTag\BIA PDF NEW")
     #output_folder = os.environ.get("PADDLE_OUTPUT_FOLDER", r"C:\Users\tior\Documents\AutoTag\Paddle DOCX Output\BIA2")
-    input_folder = os.environ.get("PADDLE_INPUT_FOLDER", r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\PDF\BIA PDF TEST SAMPLE")
-    output_folder = os.environ.get("PADDLE_OUTPUT_FOLDER", r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\Paddle DOCX Output\BIA")
+    input_folder = os.environ.get("PADDLE_INPUT_FOLDER", r"C:\Users\tior\Downloads\OneDrive_1_4-24-2026\Rel 133")
+    output_folder = os.environ.get("PADDLE_OUTPUT_FOLDER", r"C:\Users\tior\Downloads\OneDrive_1_4-24-2026\Rel 133\output")
     
 
     os.makedirs(output_folder, exist_ok=True)

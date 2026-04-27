@@ -16,12 +16,8 @@ def replaceRedactions(image: str):
 
     gray = cv2.cvtColor(loaded_image, cv2.COLOR_BGR2GRAY)
     thresh = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        51,
-        9,
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 51, 9,
     )
 
     contours = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -75,7 +71,9 @@ def pdfToImage(filepath: str | Path, filename: str, workDirFolder: str | Path) -
         raise ValueError(f"Expected a PDF file, got: {pdf_path}")
 
     clean_filename = pdf_path.stem
-    output_path = Path(workDirFolder) / "images" / clean_filename
+    parent_folder_name = pdf_path.parent.name
+    output_folder_name = f"{parent_folder_name}_{clean_filename}"
+    output_path = Path(workDirFolder) / "images" / output_folder_name
     output_path.mkdir(parents=True, exist_ok=True)
 
     doc = fitz.open(str(pdf_path))
@@ -104,7 +102,7 @@ def prepare_pdf_images_for_ocr(pdf_file: str | Path, work_dir_folder: str | Path
     return pdfToImage(str(pdf_path), pdf_path.name, str(work_dir_folder))
 
 def pdf_ocr_preprocessor_main(pdf_folder, output_folder):
-    output_folder = Path(output_folder) / "pdf_ocr_preprocessor"
+    output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -122,7 +120,7 @@ def pdf_ocr_preprocessor_main(pdf_folder, output_folder):
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    pdf_folder = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\PDF\AAO")
+    pdf_folder = Path(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\PDF\BIA PDF TEST SAMPLE")
     output_folder = "output_folder"
 
     try:
