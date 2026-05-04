@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 WORD_PATTERN = re.compile(r"\S+")
-
+NFP_PATTERN = re.compile(r"\bNOT FOR PUBLICATION\b.*", re.DOTALL)
 
 
 def read_text_file(file_path: Path) -> str:
@@ -18,6 +18,11 @@ def read_text_file(file_path: Path) -> str:
 
 def count_text_words(file_path: Path) -> int:
     text = read_text_file(file_path)
+
+    match = NFP_PATTERN.search(text)
+    if match:
+        text = match.group(0)  # Start from first exact uppercase match
+
     return len(WORD_PATTERN.findall(text))
 
 
@@ -29,7 +34,10 @@ def list_text_files(folder_path: Path) -> list[Path]:
 
 
 def write_word_counts(output_path: Path, results: list[str], total_word_count: int) -> None:
-    output_path.write_text("\n".join(results + [f"Total - {total_word_count}"]) + "\n", encoding="utf-8")
+    output_path.write_text(
+        "\n".join(results + [f"Total - {total_word_count}"]) + "\n",
+        encoding="utf-8"
+    )
 
 
 def txt_counter_main(input_folder, output_file):
@@ -57,7 +65,7 @@ def txt_counter_main(input_folder, output_file):
 
 
 if __name__ == "__main__":
-    DEFAULT_INPUT_FOLDER = Path(r"C:\Users\tior\Downloads\Test\output\new_text")
-    DEFAULT_OUTPUT_FILE = Path(r"C:\Users\tior\Downloads\Test\output\new_text\file_count.txt")
+    DEFAULT_INPUT_FOLDER = Path(r"C:\Users\tior\Downloads\OneDrive_1_4-24-2026\output_ptt\texts")
+    DEFAULT_OUTPUT_FILE = Path(r"C:\Users\tior\Downloads\OneDrive_1_4-24-2026\output_ptt\file_count.txt")
 
     txt_counter_main(DEFAULT_INPUT_FOLDER, DEFAULT_OUTPUT_FILE)

@@ -4,10 +4,10 @@ from pathlib import Path
 import multiprocessing
 
 
-def main() -> None:
+def main_function(input_folder: str):
     print("Starting PDF to TXT OCR...")
 
-    pdf_input_folder = Path(r"C:\Users\tior\Documents\PDF Files")
+    pdf_input_folder = Path(rf"{input_folder}")
     pdf_output_folder = pdf_input_folder / "output"
     text_output_folder = pdf_output_folder / "texts"
 
@@ -30,4 +30,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    main()
+    main_function(r"C:\Users\tior\Documents\PDF Files")

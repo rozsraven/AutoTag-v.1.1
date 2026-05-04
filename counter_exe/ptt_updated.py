@@ -682,8 +682,7 @@ def process_pdf_to_text_file_isolated(
 
 
 def pdf_to_text_ocr_main(input_folder: str | Path, output_folder: str | Path) -> list[Path]:
-    current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"{current_time} PDF OCR Started\n")
+    print("PDF OCR Started\n")
 
     load_dotenv_if_present()
 
@@ -709,13 +708,12 @@ def pdf_to_text_ocr_main(input_folder: str | Path, output_folder: str | Path) ->
 
     for pdf_file in pdf_files:
         try:
-            current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-            print(f"{current_time} Processing PDF: {pdf_file.relative_to(input_path)}")
+            print(f"Processing PDF: {pdf_file.relative_to(input_path)}")
             output_file = _get_pdf_text_output_path(pdf_file, output_path, input_path)
             if output_file.exists():
                 skips += 1
                 output_files.append(output_file)
-                print(f"{current_time} Skipping existing text file: {output_file}")
+                print(f"Skipping existing text file: {output_file}")
                 continue
 
             output_file = process_pdf_to_text_file_isolated(
@@ -726,10 +724,10 @@ def pdf_to_text_ocr_main(input_folder: str | Path, output_folder: str | Path) ->
             )
             output_files.append(output_file)
             successes += 1
-            print(f"{current_time} Saved text: {output_file}")
+            print(f"Saved text: {output_file}")
         except Exception as exc:
             fails += 1
-            print(f"{current_time} Failed PDF {pdf_file}: {exc}")
+            print(f"Failed PDF {pdf_file}: {exc}")
         finally:
             _flush_process_memory()
 

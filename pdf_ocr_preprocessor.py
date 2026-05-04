@@ -65,7 +65,12 @@ def replaceRedactions(image: str):
     return output_image
 
 
-def pdfToImage(filepath: str | Path, filename: str, workDirFolder: str | Path) -> list[str]:
+def pdfToImage(
+    filepath: str | Path,
+    filename: str,
+    workDirFolder: str | Path,
+    relative_output_path: str | Path | None = None,
+) -> list[str]:
     """Convert each PDF page to PNG using PyMuPDF, then clean redactions."""
     pdf_path = Path(filepath).expanduser().resolve()
     if not pdf_path.exists():
@@ -75,8 +80,7 @@ def pdfToImage(filepath: str | Path, filename: str, workDirFolder: str | Path) -
         raise ValueError(f"Expected a PDF file, got: {pdf_path}")
 
     clean_filename = pdf_path.stem
-    parent_folder_name = pdf_path.parent.name
-    output_folder_name = f"{parent_folder_name}_{clean_filename}"
+    output_folder_name = Path(relative_output_path) if relative_output_path is not None else Path(clean_filename)
     output_path = Path(workDirFolder) / "images" / output_folder_name
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -100,23 +104,29 @@ def pdfToImage(filepath: str | Path, filename: str, workDirFolder: str | Path) -
     return image_paths
 
 
-def prepare_pdf_images_for_ocr(pdf_file: str | Path, work_dir_folder: str | Path) -> list[str]:
+def prepare_pdf_images_for_ocr(
+    pdf_file: str | Path,
+    work_dir_folder: str | Path,
+    relative_output_path: str | Path | None = None,
+) -> list[str]:
     """Wrapper function for PDF-to-image OCR preparation."""
     pdf_path = Path(pdf_file)
-    return pdfToImage(str(pdf_path), pdf_path.name, str(work_dir_folder))
+    return pdfToImage(str(pdf_path), pdf_path.name, str(work_dir_folder), relative_output_path)
 
 def pdf_ocr_preprocessor_main(pdf_folder, output_folder):
+    pdf_folder = Path(pdf_folder)
     output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
 
     try:
-        pdf_files = sorted(path for path in pdf_folder.iterdir() if path.is_file() and path.suffix.lower() == ".pdf")
+        pdf_files = sorted(path for path in pdf_folder.rglob("*.pdf") if path.is_file())
         if not pdf_files:
             raise FileNotFoundError(f"No PDF files found in: {pdf_folder}")
 
         for pdf_file in pdf_files:
             print(f"Processing {pdf_file.name}...")
-            image_paths = prepare_pdf_images_for_ocr(pdf_file, output_folder)
+            relative_output_path = pdf_file.relative_to(pdf_folder).with_suffix("")
+            image_paths = prepare_pdf_images_for_ocr(pdf_file, output_folder, relative_output_path)
             print("Conversion complete. Images saved:")
             for path in image_paths:
                 print(path)
@@ -128,13 +138,14 @@ if __name__ == "__main__":
     output_folder = "output_folder"
 
     try:
-        pdf_files = sorted(path for path in pdf_folder.iterdir() if path.is_file() and path.suffix.lower() == ".pdf")
+        pdf_files = sorted(path for path in pdf_folder.rglob("*.pdf") if path.is_file())
         if not pdf_files:
             raise FileNotFoundError(f"No PDF files found in: {pdf_folder}")
 
         for pdf_file in pdf_files:
             print(f"Processing {pdf_file.name}...")
-            image_paths = prepare_pdf_images_for_ocr(pdf_file, output_folder)
+            relative_output_path = pdf_file.relative_to(pdf_folder).with_suffix("")
+            image_paths = prepare_pdf_images_for_ocr(pdf_file, output_folder, relative_output_path)
             print("Conversion complete. Images saved:")
             for path in image_paths:
                 print(path)
