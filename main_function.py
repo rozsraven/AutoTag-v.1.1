@@ -117,7 +117,7 @@ def run_aao(input_folder: str):
         print(f"Updated List: {updated_list}\n")
 
     print(updated_list)
-
+    print("All files processed successfully.")
 
 if __name__ == "__main__":
     run_bia(r"C:\Users\tior\Documents\PROJECTS\AutoTag v1.1\PDF\BIA PDF TEST SAMPLE")

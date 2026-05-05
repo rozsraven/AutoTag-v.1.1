@@ -30,4 +30,4 @@ def main_function(input_folder: str):
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    main_function(r"C:\Users\tior\Documents\PDF Files")
+    main_function(r"C:\Users\tior\Downloads\New folder\552026")
