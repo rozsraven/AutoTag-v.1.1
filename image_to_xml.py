@@ -1107,7 +1107,6 @@ def write_aao_xml(
 
     return output_file
 
-
 def write_bia_xml(
     filename: str,
     year: str,

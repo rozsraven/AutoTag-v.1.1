@@ -21,13 +21,11 @@ def center_window(window, width=400, height=320):
 
     window.geometry(f"{width}x{height}+{x}+{y}")
 
-
 def print_status(message):
     textarea.configure(state="normal")
     textarea.insert("end", message + "\n")
     textarea.see("end")
     textarea.configure(state="disabled")
-
 
 def browse_callback():
     folder_path = filedialog.askdirectory(title="Select PDF Folder")
@@ -36,7 +34,6 @@ def browse_callback():
         entry.delete(0, "end")
         entry.insert(0, folder_path)
         print_status("Selected folder: " + folder_path)
-
 
 def run_conversion():
     selected_type = optionmenu.get()
