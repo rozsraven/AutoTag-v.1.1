@@ -2,7 +2,7 @@ from pathlib import Path
 
 from pdf_ocr_preprocessor import pdf_ocr_preprocessor_main
 from image_output_processor import image_processor_main
-from image_to_xml import image_to_xml_main
+from image_to_xml_updated import image_to_xml_main
 
 import warnings
 

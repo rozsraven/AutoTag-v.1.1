@@ -26,3 +26,7 @@ def main_function(input_folder: str):
         print("Counting completed.")
     except Exception as e:
         print(f"Counting error: {e}")
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    main_function(r"C:\Users\tior\Downloads\383 Releases")
